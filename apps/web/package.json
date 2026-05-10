@@ -11,11 +11,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@payradar/ingestor": "workspace:*",
     "@payradar/schema": "workspace:*",
     "@payradar/scoring-engine": "workspace:*",
-    "@payradar/ingestor": "workspace:*",
     "@supabase/supabase-js": "^2.45.4",
-    "next": "15.0.0",
+    "next": "15.5.18",
     "react": "19.0.0",
     "react-dom": "19.0.0"
   },
