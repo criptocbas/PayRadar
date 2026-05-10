@@ -1,0 +1,93 @@
+-- 0003_capability_embeddings.sql.template
+--
+-- TEMPLATE — not auto-applied. The `.template` suffix keeps it out of the
+-- supabase migrations apply-set. Drop the suffix (rename to .sql) once you
+-- have an embedding pipeline ready.
+--
+-- This migration upgrades capability search from trigram fuzziness to true
+-- semantic similarity via pgvector. The companion code change is in
+-- supabase/migrations docs and docs/PGVECTOR_UPGRADE.md.
+
+create extension if not exists vector;
+
+-- ------------------------------------------------------------
+-- Embeddings store. Keyed by capability tag — one row per unique tag across
+-- the catalog. Embedding vectors come from your chosen model
+-- (OpenAI text-embedding-3-small = 1536 dim; bge-small-en-v1.5 = 384).
+-- Pick once and stick with it; mixing dimensions inside the same table is a
+-- common foot-gun.
+-- ------------------------------------------------------------
+create table capability_embeddings (
+  capability   text primary key,
+  -- Adjust the dimension to match your embedding model.
+  embedding    vector(1536) not null,
+  model        text not null,
+  created_at   timestamptz not null default now()
+);
+
+-- HNSW index on cosine distance. ~50ms top-K for tens of thousands of rows
+-- on a small Postgres instance.
+create index capability_embeddings_hnsw
+  on capability_embeddings using hnsw (embedding vector_cosine_ops);
+
+alter table capability_embeddings enable row level security;
+create policy "public read capability_embeddings"
+  on capability_embeddings for select using (true);
+
+-- ------------------------------------------------------------
+-- Replace search_endpoints with a semantic-aware version. The `q_embedding`
+-- argument lets the API pre-embed the user's query and pass the vector in.
+-- When `q_embedding` is null, behavior matches the trigram fallback (so the
+-- /v1/discover route can degrade gracefully if the embedding service is down).
+-- ------------------------------------------------------------
+drop function if exists search_endpoints(text, text, numeric, numeric, text, int);
+
+create or replace function search_endpoints(
+  q              text     default null,
+  q_embedding    vector   default null,
+  category       text     default null,
+  min_score      numeric  default 0,
+  max_price_usd  numeric  default 1e9,
+  sort_by        text     default 'score',
+  result_limit   int      default 20,
+  semantic_threshold double precision default 0.80
+)
+returns setof discover_view
+language sql
+stable
+as $$
+  with semantic_caps as (
+    select capability
+    from capability_embeddings
+    where q_embedding is not null
+      and 1 - (embedding <=> q_embedding) > semantic_threshold
+  )
+  select * from discover_view dv
+  where
+    (
+      q is null
+      or exists (
+        select 1 from unnest(dv.capabilities) cap, semantic_caps sc
+        where cap = sc.capability
+      )
+      -- Fallback: trigram + ILIKE in case the embedding lookup returned nothing.
+      or exists (
+        select 1 from unnest(dv.capabilities) cap
+        where cap ilike '%' || q || '%' or similarity(cap, q) > 0.3
+      )
+    )
+    and (category is null or category = any(coalesce(dv.provider_categories, '{}'::text[])))
+    and coalesce(dv.score, 0) >= min_score
+    and coalesce((dv.pricing->>'amount_usd')::numeric, 1e9) <= max_price_usd
+  order by
+    case sort_by
+      when 'price'      then -coalesce((dv.pricing->>'amount_usd')::numeric, 1e9)
+      when 'latency'    then coalesce((dv.dimensions->'latency'->>'score')::numeric, -1)
+      when 'confidence' then coalesce(dv.confidence, 0) * 100
+      else                  coalesce(dv.score, -1)
+    end desc nulls last
+  limit result_limit;
+$$;
+
+grant execute on function search_endpoints
+  to anon, authenticated;
