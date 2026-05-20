@@ -6,7 +6,12 @@
 //   4. ed25519-verify(score.signature.sig, canonicalize(scorePayload), key.public_key_hex)
 
 export const runtime = 'nodejs';
-export const revalidate = 3600;
+// Dynamic, not prerendered: this route reads env vars whose availability
+// can lag between deploys (Vercel doesn't always populate every var at
+// build time, especially Sensitive ones). Reading at runtime makes the
+// response correct even right after a deploy. We still let the edge cache
+// briefly for cheap public reads.
+export const dynamic = 'force-dynamic';
 
 interface KeyEntry {
   kid: string;
@@ -39,7 +44,7 @@ export async function GET() {
     {
       headers: {
         'Content-Type': 'application/json',
-        'Cache-Control': 'public, s-maxage=3600',
+        'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
       },
     }
   );
