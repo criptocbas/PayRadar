@@ -93,7 +93,9 @@ export async function runScoring(): Promise<ScoringResult> {
       const dimensions = { freshness };
       const { score, confidence, tier } = aggregate(dimensions);
       const scoreId = `scr_${randomUUID()}`;
-      const computedAt = now.toISOString();
+      // Use the same +00:00 form Postgres echoes back, so a verifier can rebuild
+    // the signed payload from the API response bytes-for-bytes.
+    const computedAt = now.toISOString().replace('Z', '+00:00');
 
       const corePayload = {
         endpoint_id: ep.id,
@@ -123,7 +125,9 @@ export async function runScoring(): Promise<ScoringResult> {
     const { score, confidence, tier } = aggregate(dimensions);
 
     const scoreId = `scr_${randomUUID()}`;
-    const computedAt = now.toISOString();
+    // Use the same +00:00 form Postgres echoes back, so a verifier can rebuild
+    // the signed payload from the API response bytes-for-bytes.
+    const computedAt = now.toISOString().replace('Z', '+00:00');
 
     // Sign over the canonical form of the score's load-bearing fields. score_id
     // is intentionally excluded so the same evidence produces the same signature
