@@ -82,15 +82,11 @@ export default async function DiscoverPage({
   }
   const categoryOptions = Array.from(allCategories).sort();
 
-  const buildSortHref = (newSort: string) => {
-    const sp = new URLSearchParams();
-    if (capability) sp.set('capability', capability);
-    if (category) sp.set('category', category);
-    if (minScore > 0) sp.set('min_score', String(minScore));
-    if (Number.isFinite(maxPrice) && maxPrice < 1_000_000_000)
-      sp.set('max_price_usd', String(maxPrice));
-    sp.set('sort_by', newSort);
-    return `/discover?${sp.toString()}`;
+  const filters = {
+    capability,
+    category,
+    min_score: minScore,
+    max_price_usd: maxPrice,
   };
 
   return (
@@ -165,7 +161,7 @@ export default async function DiscoverPage({
         </div>
       </form>
 
-      <DiscoverTable rows={rows} currentSort={sortBy} buildSortHref={buildSortHref} />
+      <DiscoverTable rows={rows} currentSort={sortBy} filters={filters} />
 
       <Leaderboards groups={leaderboards} />
     </div>

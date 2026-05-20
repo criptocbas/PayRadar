@@ -9,13 +9,22 @@ export interface DiscoverRow extends ScoreModalRow {
   provider_homepage: string | null;
 }
 
+export interface DiscoverFilters {
+  capability?: string;
+  category?: string;
+  min_score?: number;
+  max_price_usd?: number;
+}
+
 interface Props {
   rows: DiscoverRow[];
   // Current sort, controlled by URL params; the server re-fetches on change.
   // Header clicks navigate via Link rather than re-sorting client-side, which
   // keeps URLs shareable and SSR fast-paths working.
   currentSort: string;
-  buildSortHref: (sortBy: string) => string;
+  // The active filters, used to rebuild the sort URL. Passed as data (not a
+  // closure) so this component can stay client-only while the server stays RSC.
+  filters: DiscoverFilters;
 }
 
 const COLUMNS: { key: string; label: string; sortable: boolean; align?: 'right' | 'center' }[] = [
@@ -30,8 +39,24 @@ const COLUMNS: { key: string; label: string; sortable: boolean; align?: 'right' 
   { key: 'tier', label: 'Tier', sortable: false, align: 'center' },
 ];
 
-export function DiscoverTable({ rows, currentSort, buildSortHref }: Props) {
+export function DiscoverTable({ rows, currentSort, filters }: Props) {
   const [selected, setSelected] = useState<DiscoverRow | null>(null);
+
+  const buildSortHref = (sortBy: string) => {
+    const sp = new URLSearchParams();
+    if (filters.capability) sp.set('capability', filters.capability);
+    if (filters.category) sp.set('category', filters.category);
+    if ((filters.min_score ?? 0) > 0) sp.set('min_score', String(filters.min_score));
+    if (
+      filters.max_price_usd != null &&
+      Number.isFinite(filters.max_price_usd) &&
+      filters.max_price_usd < 1_000_000_000
+    ) {
+      sp.set('max_price_usd', String(filters.max_price_usd));
+    }
+    sp.set('sort_by', sortBy);
+    return `/discover?${sp.toString()}`;
+  };
 
   if (rows.length === 0) {
     return <div className="text-white/50 text-sm py-8">No endpoints match.</div>;
