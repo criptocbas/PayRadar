@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: POST /api/cron/sync
+      - name: GET /api/cron/sync
         env:
           DEPLOY_URL: ${{ secrets.PAYRADAR_DEPLOY_URL }}
           CRON_SECRET: ${{ secrets.PAYRADAR_CRON_SECRET }}
@@ -26,7 +26,7 @@ jobs:
             echo "Missing PAYRADAR_DEPLOY_URL or PAYRADAR_CRON_SECRET secret"
             exit 1
           fi
-          response=$(curl -sS -w "\n%{http_code}" --max-time 240 -X POST \
+          response=$(curl -sS -w "\n%{http_code}" --max-time 300 \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$DEPLOY_URL/api/cron/sync")
           body=$(echo "$response" | head -n -1)
