@@ -11,9 +11,21 @@ create extension if not exists pg_trgm;
 -- This is "semantic-ish": it tolerates typos and partial matches.
 -- The pgvector upgrade path (true semantic capability search) lives behind a
 -- capability_embeddings table — out of scope for v0.1 MVP.
+-- ----------------------------------------------------------------------------
+-- Why the wrapper: Postgres rejects array_to_string in a functional index
+-- because it's not marked IMMUTABLE in the catalog. With a fixed non-null
+-- separator the result is fully deterministic, so we wrap it in an IMMUTABLE
+-- helper so the GIN index can be built.
 -- ============================================================================
+create or replace function payradar_caps_text(arr text[])
+returns text
+language sql
+immutable
+parallel safe
+as $$ select array_to_string(arr, ' ') $$;
+
 create index endpoints_capabilities_trgm_idx
-  on endpoints using gin (array_to_string(capabilities, ' ') gin_trgm_ops);
+  on endpoints using gin (payradar_caps_text(capabilities) gin_trgm_ops);
 
 create index providers_name_trgm_idx
   on providers using gin (lower(name) gin_trgm_ops);
