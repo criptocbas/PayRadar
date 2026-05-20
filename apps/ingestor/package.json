@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx watch src/cli.ts",
-    "sync": "tsx src/cli.ts sync-catalog",
-    "probe": "tsx src/cli.ts run-probes",
-    "score": "tsx src/cli.ts run-scoring",
-    "all": "tsx src/cli.ts all",
+    "dev": "tsx watch --env-file=../../.env.local src/cli.ts",
+    "sync": "tsx --env-file=../../.env.local src/cli.ts sync-catalog",
+    "probe": "tsx --env-file=../../.env.local src/cli.ts run-probes",
+    "score": "tsx --env-file=../../.env.local src/cli.ts run-scoring",
+    "all": "tsx --env-file=../../.env.local src/cli.ts all",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
