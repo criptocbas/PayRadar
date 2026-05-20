@@ -56,15 +56,41 @@ export async function runScoring(): Promise<ScoringResult> {
     };
   }
 
-  // Pull the last 30d of probes per endpoint. Single SELECT is fine at v0
-  // scale (~834 endpoints × O(1k) probes each); chunk this when probe volume
-  // crosses ~1M rows.
+  // Pull the last 30d of probes per endpoint, paginated. PostgREST caps a
+  // single response at 1000 rows by default — without paging we'd silently
+  // drop most probe evidence past row 1000 and every score's evidence_count
+  // would max out at ~1000/endpoints (~1.4 at v0 scale). Chunk by stable
+  // ordering on probe_id (text PK) so the next page picks up where the prior
+  // left off.
   const since = new Date(now.getTime() - PROBE_LOOKBACK_HOURS * 3600 * 1000).toISOString();
-  const { data: probes, error: probeErr } = await sb
-    .from('probes')
-    .select('probe_id, endpoint_id, ts, probe_type, ok, http_status, latency_ms, tls_valid')
-    .gte('ts', since);
-  if (probeErr) throw probeErr;
+  const PAGE = 1000;
+  const probes: Array<{
+    probe_id: string;
+    endpoint_id: string;
+    ts: string;
+    probe_type: string;
+    ok: boolean;
+    http_status: number | null;
+    latency_ms: number | null;
+    tls_valid: boolean | null;
+  }> = [];
+  let cursor = '';
+  while (true) {
+    const q = sb
+      .from('probes')
+      .select('probe_id, endpoint_id, ts, probe_type, ok, http_status, latency_ms, tls_valid')
+      .gte('ts', since)
+      .order('probe_id', { ascending: true })
+      .limit(PAGE);
+    const { data: page, error: probeErr } = cursor
+      ? await q.gt('probe_id', cursor)
+      : await q;
+    if (probeErr) throw probeErr;
+    if (!page || page.length === 0) break;
+    probes.push(...(page as typeof probes));
+    if (page.length < PAGE) break;
+    cursor = page[page.length - 1]!.probe_id;
+  }
 
   const probesByEndpoint = new Map<string, ProbeRecord[]>();
   for (const p of probes ?? []) {
