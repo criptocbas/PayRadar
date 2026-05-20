@@ -4,17 +4,19 @@
 
 ---
 
-## TL;DR — current state (as of 2026-05-09)
+## TL;DR — current state (as of 2026-05-20)
 
-**The codebase is built and pushed.** Repo: https://github.com/criptocbas/PayRadar (main, single root commit `8a20490`). Local environment is fully set up.
+**Shipped. Running in prod.**
 
-**We are blocked on one user decision: where to host Postgres.** The user (CBas) already has 2 active Supabase projects (free tier cap) and is choosing between:
+- **Live:** https://pay-radar-web.vercel.app
+- **Repo:** https://github.com/criptocbas/PayRadar (auto-deploys on push to `main`)
+- **DB:** Supabase project `xhdnnlfceuvjzuipibzi`. **Owned by a Supabase account OTHER than `criptocbas`** (the user's `sbarrientos2` account — used because `criptocbas` was already at the free-tier 2-project cap).
+- **Cron:** GitHub Actions `.github/workflows/sync.yml` GETs `/api/cron/sync` every 30 min via `PAYRADAR_CRON_SECRET`. Vercel daily cron (`0 0 * * *` in `apps/web/vercel.json`) is the fallback — Hobby tier disallows sub-daily.
+- **Oracle key:** kid `pr-oracle-2026-q2`, public key at `/.well-known/payradar-keys.json`. End-to-end signature verify confirmed live against prod (3/3 on launch day).
 
-1. **Free a Supabase slot** (delete or pause a dormant project) — zero code changes
-2. **Switch to Neon** — ~30 min code change: swap `@supabase/supabase-js` → `pg`/`@neondatabase/serverless`, rewrite `apps/web/lib/supabase.ts` and `apps/ingestor/src/supabase.ts`, plus the cron route. RLS policies still work via separate role connection strings.
-3. **Supabase Pro $25/mo** — zero code, no auto-pause, daily backups
+The v0.1 launch surfaced several deploy-time gotchas — see the new gotcha #s 13-17 below. The code that shipped on 2026-05-20 already accounts for them; the gotchas exist so the next change doesn't regress.
 
-**When the user comes back, ask which path they took.** Then resume from `DEPLOYMENT_CHECKLIST.md` Phase 2 (Supabase) or write the Neon swap if they picked 2.
+Resume work from "v0.2 priorities" below, or work off whatever the user brings up.
 
 ---
 
@@ -97,7 +99,8 @@ apps/
     vercel.json                    cron: */5 * * * *  (NOTE: requires Pro plan)
 
   ingestor/                      catalog sync + liveness probes + scoring
-    src/sync-catalog.ts            defensive zod parse, normalize, upsert, mark-inactive
+    src/sync-catalog.ts            two-tier fetch (catalog summaries then per-provider endpoints),
+                                   defensive zod parse, pricing normalization, upsert, mark-inactive
     src/run-probes.ts              HEAD/GET liveness, 8s timeout, concurrency 16
     src/run-scoring.ts             reliability + latency + freshness, peer baselines, signs each score
     src/track.ts                   trackRun() wrapper writes to sync_runs
@@ -122,6 +125,10 @@ supabase/migrations/
   0001_initial.sql               base schema, RLS public-read policies, discover_view
   0002_search_freshness.sql      pg_trgm, sync_runs, refreshed view, search_endpoints RPC
   0003_capability_embeddings.sql.template   pgvector upgrade (NOT auto-applied)
+
+.github/workflows/
+  sync.yml                       every-30-min cron: GET /api/cron/sync with PAYRADAR_CRON_SECRET.
+                                 Needs repo secrets PAYRADAR_DEPLOY_URL + PAYRADAR_CRON_SECRET.
 
 docs/
   PGVECTOR_UPGRADE.md            semantic search upgrade path + tradeoffs
@@ -192,9 +199,9 @@ The schema and scoring-engine are TS source — if you change them, rebuild befo
 
 ## Things that will bite you (a.k.a. the gotchas list)
 
-1. **The pay.sh catalog response shape is guessed.** `apps/ingestor/src/sync-catalog.ts` parses with `passthrough()` and falls back gracefully. First time it runs against the live endpoint, the field mappings (especially `pricing` and the providers↔endpoints relationship) probably need adjustment. Check normalized output before assuming the ingest is correct.
+1. **Pay.sh catalog shape is two-tier and fragile.** `/api/catalog` returns provider *summaries* (`fqn`, `title`, `category` singular, `service_url`, `endpoint_count`). Per-provider endpoints live at `/api/providers/{fqn}` and need a separate fan-out fetch. `sync-catalog.ts` runs concurrency ≤3 because pay.sh rate-limits aggressively at higher fanout — retries within ~5s don't help. Bad endpoints have nullable `resource`/`pricing` fields, so Zod schemas use `.nullish()` not `.optional()`. If you change the parser, the field names below are the only ones the rest of the pipeline relies on; everything else flows through `.passthrough()`.
 
-2. **Vercel cron `*/5 * * * *` requires Pro.** Hobby tier = daily only. If on Hobby: edit `apps/web/vercel.json` to `0 * * * *` and redeploy, or run the ingestor on Railway/Fly.
+2. **Vercel Hobby cron is daily-only.** `vercel.json` is set to `0 0 * * *` (daily at midnight UTC) — that's the only schedule Vercel will accept on this tier. Sub-daily attempts (`0 * * * *`, `*/30 * * * *`) silently break the deploy (project shell created, no build queued, red error in the deploy modal). For finer freshness, `.github/workflows/sync.yml` runs every 30 min and POSTs the cron endpoint via bearer. If you want to switch to Pro and consolidate, update both `vercel.json` and delete the workflow.
 
 3. **In-memory rate limiter is per-instance.** A determined attacker hitting many warm Vercel functions bypasses the cap. Documented limitation, upgrade path is `@upstash/ratelimit`. Don't add stricter caps without first switching backends.
 
@@ -215,6 +222,18 @@ The schema and scoring-engine are TS source — if you change them, rebuild befo
 11. **Cold-start cap is 50 evidence points.** Endpoints with fewer total evidence across all dimensions get tier `PROVISIONAL` regardless of score. This is intentional — don't try to "fix" PROVISIONAL endpoints showing high raw scores; that's the design.
 
 12. **Node 25 is current, not LTS.** User is on v25.2.1. If native modules complain (rare, but `sharp` is in there for Next), Node 22 LTS is the fallback. Don't refactor to dodge a Node-version-specific quirk.
+
+13. **Vercel "Sensitive" env vars don't reliably populate at build time.** For routes that use `export const revalidate = <n>`, Next prerenders at build, captures the env value once, and caches it for hours. If a Sensitive var was missing at prerender, the empty/wrong value sticks. The fix is `export const dynamic = 'force-dynamic'` on any route that reads env at runtime — already done for `/api/well-known/keys`. Don't add `revalidate` to routes that touch env vars.
+
+14. **`NEXT_PUBLIC_*` env vars ship to the browser by design.** Marking them Sensitive on Vercel is misleading theater — they end up in the JS bundle either way. Anon key is meant to be public; RLS enforces access. Only mark `SUPABASE_SERVICE_ROLE_KEY` and `PAYRADAR_SIGNING_PRIVATE_KEY_HEX` as Sensitive — those are real secrets. `CRON_SECRET` is borderline (defense-in-depth Sensitive is fine).
+
+15. **`/api/cron/sync` is GET-only**, not POST. Vercel Cron itself sends GET. The GitHub Actions workflow uses GET; don't switch to POST without also adding `export async function POST` to the route.
+
+16. **`apps/ingestor/package.json` MUST declare `main` + `types` + `exports`** pointing to `dist/`. Without them, `tsc` in `apps/web` can't resolve `import {...} from '@payradar/ingestor'`. Next dev/build works either way (via `transpilePackages` bundling raw TS source), so the bug only surfaces when Vercel runs the type-check phase. Same applies if you add another `apps/<thing>` package and have web import from it.
+
+17. **The Postgres timestamp serialization differs between JS and Postgres.** JS `toISOString()` produces `2026-05-20T12:52:07.153Z`; Postgres echoes `timestamptz` as `2026-05-20T12:52:07.153+00:00`. Same instant, different bytes — canonical-JSON treats them as different. `run-scoring.ts` normalizes `computed_at` to `+00:00` form before signing so verifiers can rebuild the payload bytes-for-bytes from the API response. If you add any other signed timestamp field, do the same normalization.
+
+18. **Arch users: the AUR `supabase-bin` package can self-update to a version where the `supabase` shim can't find its `supabase-go` backend.** Symptom: any `supabase` command errors with "Cannot find supabase-go binary." Fix: `curl -sL https://github.com/supabase/cli/releases/download/v<latest>/supabase_<latest>_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/share/supabase` then prepend that dir to PATH or set `SUPABASE_GO_BINARY`. Not a code issue — only mention because debugging it cost real time on launch day.
 
 ---
 
@@ -241,48 +260,37 @@ The schema and scoring-engine are TS source — if you change them, rebuild befo
 
 ---
 
-## Open decisions / handoff items
+## Operational facts (post-launch)
 
-- **[BLOCKED]** Postgres host: Supabase free / Supabase Pro / Neon. Asked the user, awaiting answer. See TL;DR.
 - The user's email is `sebastianbarrientosa@gmail.com`. Identity in the spec is "CBas". Don't change owner attribution.
 - The user is technical (Arch Linux, comfortable with pnpm/git/CLI). Don't over-explain.
-- The repo has a single commit. Future work is incremental; commits should be focused (one topic per commit) with clear "why" in the message.
-- `pnpm-lock.yaml` was generated locally but **may or may not be committed yet** — check `git status` before assuming.
-- The user bumped `next` to `15.5.18` (from `15.0.0`) to silence peer-dep warnings. That's the version going forward.
+- `pnpm-lock.yaml` IS committed. `next` is pinned to `15.5.18`.
+- `apps/web/.env.local` is a symlink to the repo-root `.env.local`. Local-only convenience (gitignored). Vercel reads env from its dashboard regardless.
+- Secrets live in three places ONLY: the user's `.env.local`, the user's password manager (signing private key in particular), and Vercel env vars. If you rotate anything, update all three.
+- Future work is incremental; commits should be focused (one topic per commit) with clear "why" in the message — match the existing `fix(ingestor): ...` / `chore: ...` style.
 
 ---
 
-## v0.2 priorities (after v0.1 ships)
+## v0.2 priorities (rough order)
 
-In rough priority order, when this repo is live and stable:
+v0.1 is live. Don't pull v0.2 work forward unless the user asks.
 
-1. **Real catalog parsing.** Once `sync-catalog.ts` runs against pay.sh in production, tighten the field mappings.
-2. **Synthetic paid probes.** Real x402 calls from a funded PayRadar wallet. Highest-evidence-weight probe type — currently zero rows.
-3. **MCP server.** Wraps `/v1/discover` as an MCP tool. The README already promises this.
-4. **TypeScript SDK.** `@payradar/sdk` — typed wrapper over the REST API + signature verification helpers. Lives in `packages/sdk-ts/`.
-5. **pgvector semantic search.** `docs/PGVECTOR_UPGRADE.md` is the playbook. Trigger condition: queries returning 0 results when the catalog clearly has matches.
-6. **Geo-distributed probes.** Single-region probes are gameable via IP allowlist. Add at least 2 more regions.
-7. **Trust + security dimensions.** Out of the six stubs, `trust` and `security` are the lowest-effort to ship next.
-
-Don't pull v0.2 work forward unless the user asks. v0.1 ships first.
+1. **Synthetic paid probes.** Real x402 calls from a funded PayRadar wallet. Highest-evidence-weight probe type — currently zero rows. Biggest single quality unlock for scores.
+2. **MCP server.** Wraps `/v1/discover` as an MCP tool. The README already promises this.
+3. **TypeScript SDK.** `@payradar/sdk` — typed wrapper over the REST API + signature verification helpers. Lives in `packages/sdk-ts/`.
+4. **pgvector semantic search.** `docs/PGVECTOR_UPGRADE.md` is the playbook. Trigger condition: queries returning 0 results when the catalog clearly has matches.
+5. **Geo-distributed probes.** Single-region probes are gameable via IP allowlist. Add at least 2 more regions.
+6. **Trust + security dimensions.** Out of the six stubs, `trust` and `security` are the lowest-effort to ship next.
 
 ---
 
 ## When the user comes back
 
 1. Greet briefly. Don't recap the whole project — they wrote it.
-2. Ask: "Which Postgres path did you pick — free a Supabase slot, Pro, or Neon?"
-3. Resume `DEPLOYMENT_CHECKLIST.md` Phase 2, OR write the Neon swap. The Neon swap touches:
-   - `apps/web/lib/supabase.ts` → swap for `@neondatabase/serverless` Pool
-   - `apps/ingestor/src/supabase.ts` → same
-   - `apps/web/app/api/v1/discover/route.ts` → `.rpc(...)` becomes a parameterized SQL string
-   - `apps/web/app/api/v1/status/route.ts` → same
-   - `apps/web/app/discover/page.tsx` and `apps/web/app/providers/[slug]/page.tsx` → small select rewrites
-   - Add `DATABASE_URL` env var
-   - RLS still works but enforced via separate role connection strings (anon vs admin)
-   - Migrations unchanged — same Postgres
-4. After Postgres is up, the rest of `DEPLOYMENT_CHECKLIST.md` is mechanical.
+2. The site is live at https://pay-radar-web.vercel.app. Before assuming anything about prod state, hit `/api/v1/status` — it returns row counts and last-run timestamps. That's the cheapest way to know if the cron is healthy.
+3. Ask what they want to work on. The v0.2 priorities below are the natural next steps but the user may have a different ask.
+4. For any change that touches the deploy pipeline, scan gotchas #1, #2, #13, #14, #16, #17 above first — they're the silent ones.
 
 ---
 
-*Last updated: 2026-05-09 — initial commit pushed, awaiting Postgres host decision.*
+*Last updated: 2026-05-20 — v0.1 deployed to https://pay-radar-web.vercel.app; GitHub Actions cron running every 30 min; signature verify confirmed live.*
