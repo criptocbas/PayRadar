@@ -10,7 +10,7 @@ export const revalidate = 30;
 
 export async function GET(req: NextRequest) {
   // 1. Rate limit before doing any work.
-  const rl = rateLimit(clientKey(req));
+  const rl = await rateLimit(clientKey(req));
   if (!rl.ok) {
     return Response.json(
       { error: 'rate_limited', detail: 'too many requests; back off and retry' },
