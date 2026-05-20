@@ -14,6 +14,21 @@ import { loadSigner } from './keys.js';
 
 const PROBE_LOOKBACK_HOURS = 30 * 24;
 
+// Postgres's timestamptz text output strips trailing zeros from the fractional
+// second (and drops the decimal entirely when all zeros). JS `toISOString()`
+// always emits `.XYZ` (3 digits). To make signed payloads byte-equal to the
+// round-tripped API response, normalize to Postgres's exact form before signing.
+//   .450+00:00  -> .45+00:00
+//   .123+00:00  -> .123+00:00   (unchanged)
+//   .100+00:00  -> .1+00:00
+//   .000+00:00  -> +00:00       (decimal removed)
+function pgTimestampForm(date: Date): string {
+  let s = date.toISOString().replace('Z', '+00:00');
+  s = s.replace(/\.(\d+?)0+(\+\d{2}:\d{2})$/, '.$1$2');
+  s = s.replace(/\.0+(\+\d{2}:\d{2})$/, '$1');
+  return s;
+}
+
 export interface ScoringResult {
   endpoints_scored: number;
   endpoints_skipped: number;
@@ -93,9 +108,7 @@ export async function runScoring(): Promise<ScoringResult> {
       const dimensions = { freshness };
       const { score, confidence, tier } = aggregate(dimensions);
       const scoreId = `scr_${randomUUID()}`;
-      // Use the same +00:00 form Postgres echoes back, so a verifier can rebuild
-    // the signed payload from the API response bytes-for-bytes.
-    const computedAt = now.toISOString().replace('Z', '+00:00');
+      const computedAt = pgTimestampForm(now);
 
       const corePayload = {
         endpoint_id: ep.id,
@@ -125,9 +138,7 @@ export async function runScoring(): Promise<ScoringResult> {
     const { score, confidence, tier } = aggregate(dimensions);
 
     const scoreId = `scr_${randomUUID()}`;
-    // Use the same +00:00 form Postgres echoes back, so a verifier can rebuild
-    // the signed payload from the API response bytes-for-bytes.
-    const computedAt = now.toISOString().replace('Z', '+00:00');
+    const computedAt = pgTimestampForm(now);
 
     // Sign over the canonical form of the score's load-bearing fields. score_id
     // is intentionally excluded so the same evidence produces the same signature
