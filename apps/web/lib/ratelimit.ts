@@ -79,13 +79,17 @@ function rateLimitInMemory(key: string): RateLimitResult {
 
 // ---------------- Public API -----------------------------------------------
 
-export async function rateLimit(key: string): Promise<RateLimitResult> {
+export interface RateLimitResultWithBackend extends RateLimitResult {
+  backend: 'upstash' | 'memory';
+}
+
+export async function rateLimit(key: string): Promise<RateLimitResultWithBackend> {
   const upstash = getUpstash();
   if (upstash) {
     const { success, limit, remaining, reset } = await upstash.limit(key);
-    return { ok: success, limit, remaining, resetAt: reset };
+    return { ok: success, limit, remaining, resetAt: reset, backend: 'upstash' };
   }
-  return rateLimitInMemory(key);
+  return { ...rateLimitInMemory(key), backend: 'memory' };
 }
 
 export function clientKey(req: Request): string {
@@ -97,12 +101,16 @@ export function clientKey(req: Request): string {
   return req.headers.get('x-real-ip') ?? 'unknown';
 }
 
-export function rateLimitHeaders(r: RateLimitResult): Record<string, string> {
+export function rateLimitHeaders(
+  r: RateLimitResult | RateLimitResultWithBackend
+): Record<string, string> {
   const retryAfter = Math.max(0, Math.ceil((r.resetAt - Date.now()) / 1000));
+  const backend = (r as RateLimitResultWithBackend).backend;
   return {
     'X-RateLimit-Limit': String(r.limit),
     'X-RateLimit-Remaining': String(r.remaining),
     'X-RateLimit-Reset': String(Math.floor(r.resetAt / 1000)),
+    ...(backend ? { 'X-RateLimit-Backend': backend } : {}),
     ...(r.ok ? {} : { 'Retry-After': String(retryAfter) }),
   };
 }
