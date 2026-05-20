@@ -1,0 +1,36 @@
+name: PayRadar sync
+
+on:
+  schedule:
+    # GitHub Actions cron runs in UTC. */30 -> twice an hour. Use this as the
+    # primary refresh signal; Vercel's daily cron is a defense-in-depth
+    # fallback for if this workflow stalls.
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: payradar-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST /api/cron/sync
+        env:
+          DEPLOY_URL: ${{ secrets.PAYRADAR_DEPLOY_URL }}
+          CRON_SECRET: ${{ secrets.PAYRADAR_CRON_SECRET }}
+        run: |
+          if [ -z "$DEPLOY_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Missing PAYRADAR_DEPLOY_URL or PAYRADAR_CRON_SECRET secret"
+            exit 1
+          fi
+          response=$(curl -sS -w "\n%{http_code}" --max-time 240 -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$DEPLOY_URL/api/cron/sync")
+          body=$(echo "$response" | head -n -1)
+          code=$(echo "$response" | tail -n 1)
+          echo "HTTP $code"
+          echo "$body"
+          [ "$code" = "200" ]
