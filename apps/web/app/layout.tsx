@@ -2,10 +2,29 @@ import type { Metadata } from 'next';
 import './globals.css';
 import Link from 'next/link';
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ?? 'https://pay-radar-web.vercel.app';
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: 'PayRadar — Trust + Discovery for pay.sh',
   description:
-    'Trust scores, latency, and reliability for every pay.sh API endpoint. Built for autonomous AI agents.',
+    'Signed reliability, latency, and freshness scores for every pay-as-you-go API in the pay.sh catalog. Verifiable offline. Open formula. Built for agents.',
+  openGraph: {
+    title: 'PayRadar — Trust + Discovery for pay.sh',
+    description:
+      'Signed reliability, latency, and freshness scores for every pay-as-you-go API. Verifiable offline. Open formula. Built for agents.',
+    url: siteUrl,
+    siteName: 'PayRadar',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'PayRadar — Trust + Discovery for pay.sh',
+    description:
+      'Signed reliability, latency, and freshness scores for every pay-as-you-go API. Built for agents.',
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -45,7 +45,23 @@ export async function GET() {
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+        // Public key publication — any origin must be able to fetch this to
+        // verify signatures in the browser. No preflight needed for a simple
+        // GET, but include the headers explicitly so consumers know it's safe.
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
       },
     }
   );
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Max-Age': '86400',
+    },
+  });
 }

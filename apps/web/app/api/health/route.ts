@@ -13,7 +13,10 @@ export async function GET() {
       ts: new Date().toISOString(),
     },
     {
-      headers: { 'Cache-Control': 'no-store' },
+      headers: {
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      },
     }
   );
 }
