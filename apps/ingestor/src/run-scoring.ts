@@ -14,7 +14,7 @@ import { loadSigner } from './keys.js';
 
 const PROBE_LOOKBACK_HOURS = 30 * 24;
 
-interface ScoringResult {
+export interface ScoringResult {
   endpoints_scored: number;
   endpoints_skipped: number;
   scores_signed: number;

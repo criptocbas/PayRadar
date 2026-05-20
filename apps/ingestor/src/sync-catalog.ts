@@ -68,7 +68,7 @@ const PayProviderDetail = z
   })
   .passthrough();
 
-interface SyncResult {
+export interface SyncResult {
   providers_seen: number;
   endpoints_seen: number;
   providers_upserted: number;
@@ -104,7 +104,7 @@ function joinUrl(base: string, path: string): string {
   return `${trimmedBase}/${trimmedPath}`;
 }
 
-function normalizePricing(raw: unknown, supportedTokens: string[] | undefined): Pricing {
+function normalizePricing(raw: unknown, supportedTokens: string[] | null | undefined): Pricing {
   const parsed = PayPricing.safeParse(raw);
   const fallbackCurrency = supportedTokens?.[0] ?? 'USDC';
   if (!parsed.success) {
@@ -308,10 +308,9 @@ export async function syncCatalog(): Promise<SyncResult> {
   {
     const { error, count } = await sb
       .from('endpoints')
-      .update({ active: false })
+      .update({ active: false }, { count: 'exact' })
       .lt('last_seen_in_catalog', now)
-      .eq('active', true)
-      .select('id', { count: 'exact', head: true });
+      .eq('active', true);
     if (error) throw error;
     markedInactive = count ?? 0;
   }
