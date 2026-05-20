@@ -4,17 +4,21 @@
 
 ---
 
-## TL;DR — current state (as of 2026-05-20)
+## TL;DR — current state (as of 2026-05-20, post-launch-readiness sweep)
 
-**Shipped. Running in prod.**
+**Shipped and hardened. Running in prod.**
 
 - **Live:** https://pay-radar-web.vercel.app
 - **Repo:** https://github.com/criptocbas/PayRadar (auto-deploys on push to `main`)
 - **DB:** Supabase project `xhdnnlfceuvjzuipibzi`. **Owned by a Supabase account OTHER than `criptocbas`** (the user's `sbarrientos2` account — used because `criptocbas` was already at the free-tier 2-project cap).
 - **Cron:** GitHub Actions `.github/workflows/sync.yml` GETs `/api/cron/sync` every 30 min via `PAYRADAR_CRON_SECRET`. Vercel daily cron (`0 0 * * *` in `apps/web/vercel.json`) is the fallback — Hobby tier disallows sub-daily.
-- **Oracle key:** kid `pr-oracle-2026-q2`, public key at `/.well-known/payradar-keys.json`. End-to-end signature verify confirmed live against prod (3/3 on launch day).
+- **Oracle key:** kid `pr-oracle-2026-q2`, public key at `/.well-known/payradar-keys.json`. End-to-end signature verify confirmed live (6/6 via MCP).
+- **Rate limit:** Upstash Redis (cross-instance sliding window, 60 req/min/IP) when `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` are set; in-memory fallback otherwise. Verified engaged in prod via `X-RateLimit-Backend` header.
+- **MCP server:** `@payradar/mcp` package exposes `discover` and `verify_score` tools over stdio. End-to-end tested live.
+- **Observability:** Vercel Analytics + Speed Insights enabled; UptimeRobot monitor on `/api/health`. Sentry deliberately skipped at v0.1 — Vercel Logs is enough for current volume.
+- **Marketing surfaces:** OG image (1200×630 via `next/og`), Twitter Card, favicon, robots.txt, sitemap.xml (76 URLs), custom 404 + runtime error boundary.
 
-The v0.1 launch surfaced several deploy-time gotchas — see the new gotcha #s 13-17 below. The code that shipped on 2026-05-20 already accounts for them; the gotchas exist so the next change doesn't regress.
+The v0.1 launch (and the launch-readiness sweep on the same day) surfaced 20 gotchas — see below. The code in `main` already accounts for them; they exist so the next change doesn't regress.
 
 Resume work from "v0.2 priorities" below, or work off whatever the user brings up.
 
@@ -81,7 +85,15 @@ pay.sh/api/catalog  ─┐
 ```
 apps/
   web/                           Next.js 15 — dashboard + REST API + Vercel cron
+    app/layout.tsx                 metadata, OG/Twitter, Analytics + SpeedInsights
     app/page.tsx                   landing (hero, live stats, agent/human cards)
+    app/not-found.tsx              branded 404 + back-to-discover CTA
+    app/error.tsx                  runtime error boundary with retry
+    app/opengraph-image.tsx        1200x630 OG card via next/og ImageResponse
+    app/twitter-image.tsx          re-export of opengraph-image
+    app/icon.tsx                   favicon (PR mark) via ImageResponse
+    app/robots.ts                  allow all except /api/cron + /api/health
+    app/sitemap.ts                 home + /discover + scoring doc + every provider
     app/discover/page.tsx          server: fetches search_endpoints RPC + leaderboards
     app/discover/_components/
       discover-table.tsx             client: sortable table + row click → modal
@@ -91,12 +103,14 @@ apps/
     app/providers/[slug]/page.tsx  provider detail
     app/api/v1/discover/route.ts   GET: rate-limited, calls search_endpoints RPC
     app/api/v1/status/route.ts     GET: coverage % + last-run timestamps
-    app/api/health/route.ts        GET: cheap liveness
-    app/api/cron/sync/route.ts     POST trigger: bearer-auth'd, runs sync→probe→score
-    app/api/well-known/keys/route.ts  GET: oracle public keys (rewritten from /.well-known/payradar-keys.json)
-    lib/{supabase,format,ratelimit}.ts
+    app/api/health/route.ts        GET: cheap liveness (CORS open)
+    app/api/cron/sync/route.ts     GET trigger: bearer-auth'd, runs sync→probe→score
+    app/api/well-known/keys/route.ts  GET: oracle public keys (force-dynamic, CORS open)
+    lib/supabase.ts                anon + service_role clients
+    lib/format.ts                  tier/price/time helpers
+    lib/ratelimit.ts               Upstash-backed when configured, in-memory fallback
     next.config.mjs                transpilePackages + .well-known rewrite
-    vercel.json                    cron: */5 * * * *  (NOTE: requires Pro plan)
+    vercel.json                    cron: 0 0 * * *  (daily, Hobby-tier compliant)
 
   ingestor/                      catalog sync + liveness probes + scoring
     src/sync-catalog.ts            two-tier fetch (catalog summaries then per-provider endpoints),
@@ -125,6 +139,11 @@ supabase/migrations/
   0001_initial.sql               base schema, RLS public-read policies, discover_view
   0002_search_freshness.sql      pg_trgm, sync_runs, refreshed view, search_endpoints RPC
   0003_capability_embeddings.sql.template   pgvector upgrade (NOT auto-applied)
+
+packages/
+  mcp-payradar/                  @payradar/mcp — MCP server exposing two tools to agents:
+    src/index.ts                   discover() and verify_score(); stdio transport
+    package.json                   bin: mcp-payradar; PAYRADAR_BASE_URL env override
 
 .github/workflows/
   sync.yml                       every-30-min cron: GET /api/cron/sync with PAYRADAR_CRON_SECRET.
@@ -235,6 +254,10 @@ The schema and scoring-engine are TS source — if you change them, rebuild befo
 
 18. **Arch users: the AUR `supabase-bin` package can self-update to a version where the `supabase` shim can't find its `supabase-go` backend.** Symptom: any `supabase` command errors with "Cannot find supabase-go binary." Fix: `curl -sL https://github.com/supabase/cli/releases/download/v<latest>/supabase_<latest>_linux_amd64.tar.gz | tar -xzf - -C $HOME/.local/share/supabase` then prepend that dir to PATH or set `SUPABASE_GO_BINARY`. Not a code issue — only mention because debugging it cost real time on launch day.
 
+19. **Postgres `timestamptz` text output strips trailing zeros from fractional seconds.** `.450+00:00` becomes `.45+00:00`, `.100+00:00` becomes `.1+00:00`, `.000+00:00` becomes `+00:00` (no decimal at all). JS `toISOString()` always emits exactly `.XYZ` (3 digits). When the signed payload's `computed_at` doesn't match the bytes a verifier would round-trip from Postgres, ed25519 verify fails. `run-scoring.ts` has `pgTimestampForm()` that normalizes JS dates to the Postgres echo form. If you add another signed timestamp field, route it through that helper. Don't write `Date.toISOString()` into a signed payload directly.
+
+20. **PostgREST caps SELECT responses at 1000 rows by default.** Easy to miss because the response shape looks normal — you just get the first 1000. `run-scoring.ts` paginates the probes query for exactly this reason: with 700+ endpoints × N cron runs, probe volume crosses 1000 fast, and without paging every endpoint's `evidence_count` silently maxes out around 1-2 regardless of how many probes actually exist. Whenever you query a table that could exceed 1000 rows (`probes`, `scores_history` over time, future event logs), paginate with `.order(stable_pk).limit(1000)` cursored on the last row's PK. Bumping the project's `max-rows` setting in Supabase is the other path but harder to reason about across migrations.
+
 ---
 
 ## What "good" looks like for changes here
@@ -273,14 +296,15 @@ The schema and scoring-engine are TS source — if you change them, rebuild befo
 
 ## v0.2 priorities (rough order)
 
-v0.1 is live. Don't pull v0.2 work forward unless the user asks.
+v0.1 is live and hardened. Don't pull v0.2 work forward unless the user asks.
 
-1. **Synthetic paid probes.** Real x402 calls from a funded PayRadar wallet. Highest-evidence-weight probe type — currently zero rows. Biggest single quality unlock for scores.
-2. **MCP server.** Wraps `/v1/discover` as an MCP tool. The README already promises this.
-3. **TypeScript SDK.** `@payradar/sdk` — typed wrapper over the REST API + signature verification helpers. Lives in `packages/sdk-ts/`.
-4. **pgvector semantic search.** `docs/PGVECTOR_UPGRADE.md` is the playbook. Trigger condition: queries returning 0 results when the catalog clearly has matches.
+1. **Publish `@payradar/mcp` to npm.** The package exists and works (verified end-to-end); landing page + README both reference `npx -y @payradar/mcp`. Until it's on npm, that command 404s. Requires the user's npm login. One-time setup.
+2. **Synthetic paid probes.** Real x402 calls from a funded PayRadar wallet. Highest-evidence-weight probe type — currently zero rows. Biggest single quality unlock for scores.
+3. **TypeScript SDK.** `@payradar/sdk` — typed wrapper over the REST API + signature verification helpers. Lives in `packages/sdk-ts/`. Lower priority now that the MCP server covers most agent use-cases.
+4. **pgvector semantic search.** `docs/PGVECTOR_UPGRADE.md` is the playbook. Trigger condition: queries returning 0 results when the catalog clearly has matches (the current trigram index is fragile against titlecase capability tags like "Inbox" vs literal "email").
 5. **Geo-distributed probes.** Single-region probes are gameable via IP allowlist. Add at least 2 more regions.
 6. **Trust + security dimensions.** Out of the six stubs, `trust` and `security` are the lowest-effort to ship next.
+7. **Provider claim flow.** `claimed`, `claimed_by_wallet`, `claimed_at` columns exist in `providers` but no UI ever sets them.
 
 ---
 
@@ -293,4 +317,4 @@ v0.1 is live. Don't pull v0.2 work forward unless the user asks.
 
 ---
 
-*Last updated: 2026-05-20 — v0.1 deployed to https://pay-radar-web.vercel.app; GitHub Actions cron running every 30 min; signature verify confirmed live.*
+*Last updated: 2026-05-20 (later same day) — post-launch-readiness sweep: MCP server, OG/favicon/sitemap/robots, custom 404, Vercel Analytics + Speed Insights, Upstash rate limiter, UptimeRobot. Two correctness bugs caught + fixed pre-tweet: Postgres timestamp truncation (every prior signature was invalid) and PostgREST 1000-row cap (evidence was silently truncated). The only known launch-blocker remaining: publish `@payradar/mcp` to npm so the `npx` command in the landing page actually works.*
