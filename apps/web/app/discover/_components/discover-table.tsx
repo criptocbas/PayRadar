@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { ScoreModal, type ScoreModalRow } from './score-modal';
-import { tierColorClass, formatRelative, priceBand } from '@/lib/format';
+import { tierColorClass, formatRelative, priceBand, formatLatency } from '@/lib/format';
 
 export interface DiscoverRow extends ScoreModalRow {
   provider_homepage: string | null;
@@ -34,7 +34,7 @@ const COLUMNS: { key: string; label: string; sortable: boolean; align?: 'right' 
   { key: 'price', label: 'Price', sortable: true, align: 'right' },
   { key: 'score', label: 'Score', sortable: true, align: 'right' },
   { key: 'confidence', label: 'Conf.', sortable: true, align: 'right' },
-  { key: 'latency', label: 'Latency', sortable: true, align: 'right' },
+  { key: 'latency', label: 'Latency p95', sortable: true, align: 'right' },
   { key: 'last_probed', label: 'Last probed', sortable: false, align: 'right' },
   { key: 'tier', label: 'Tier', sortable: false, align: 'center' },
 ];
@@ -115,8 +115,19 @@ export function DiscoverTable({ rows, currentSort, filters }: Props) {
                     {r.provider_name}
                   </Link>
                 </td>
-                <td className="py-2 px-2 truncate max-w-[260px]" title={r.url}>
-                  <span className="text-white/40">{r.method}</span> {r.url}
+                <td className="py-2 px-2 max-w-[280px]" title={r.url}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={`shrink-0 inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${methodBadgeClass(
+                        r.method
+                      )}`}
+                    >
+                      {r.method}
+                    </span>
+                    <span className="truncate font-mono text-xs text-white/80">
+                      {r.path || r.url}
+                    </span>
+                  </div>
                 </td>
                 <td className="py-2 px-2">
                   <div className="flex flex-wrap gap-1">
@@ -144,10 +155,15 @@ export function DiscoverTable({ rows, currentSort, filters }: Props) {
                 <td className="py-2 px-2 text-right tabular-nums text-white/60">
                   {r.confidence != null ? r.confidence.toFixed(2) : '—'}
                 </td>
-                <td className="py-2 px-2 text-right tabular-nums text-white/70">
-                  {r.dimensions?.latency
-                    ? r.dimensions.latency.score.toFixed(0)
-                    : '—'}
+                <td
+                  className="py-2 px-2 text-right tabular-nums text-white/70"
+                  title={
+                    r.dimensions?.latency
+                      ? `latency score ${r.dimensions.latency.score.toFixed(0)} / 100`
+                      : undefined
+                  }
+                >
+                  {formatLatency(r.latency_p95_ms)}
                 </td>
                 <td className="py-2 px-2 text-right text-white/50 text-xs">
                   {formatRelative(r.last_probe_ts)}
@@ -166,4 +182,20 @@ export function DiscoverTable({ rows, currentSort, filters }: Props) {
       {selected ? <ScoreModal row={selected} onClose={() => setSelected(null)} /> : null}
     </>
   );
+}
+
+function methodBadgeClass(method: string): string {
+  switch (method.toUpperCase()) {
+    case 'GET':
+      return 'text-sky-300 border-sky-500/30 bg-sky-500/5';
+    case 'POST':
+      return 'text-emerald-300 border-emerald-500/30 bg-emerald-500/5';
+    case 'PUT':
+    case 'PATCH':
+      return 'text-amber-300 border-amber-500/30 bg-amber-500/5';
+    case 'DELETE':
+      return 'text-red-300 border-red-500/30 bg-red-500/5';
+    default:
+      return 'text-white/60 border-white/10 bg-white/5';
+  }
 }

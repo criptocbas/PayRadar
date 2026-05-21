@@ -24,6 +24,7 @@ function rowFromView(r: any): DiscoverRow {
   return {
     endpoint_id: r.endpoint_id,
     url: r.url,
+    path: r.path ?? safePathname(r.url),
     method: r.method,
     capabilities: r.capabilities ?? [],
     pricing: r.pricing,
@@ -38,7 +39,16 @@ function rowFromView(r: any): DiscoverRow {
     score_computed_at: r.score_computed_at,
     engine_version: r.engine_version,
     last_probe_ts: r.last_probe_ts ?? null,
+    latency_p95_ms: r.latency_p95_ms != null ? Number(r.latency_p95_ms) : null,
   };
+}
+
+function safePathname(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
 }
 
 export default async function DiscoverPage({
@@ -55,8 +65,8 @@ export default async function DiscoverPage({
 
   const sb = supabasePublic();
 
-  // Main result set + leaderboards run in parallel.
-  const [resultsRes, leaderboardRes, categoriesRes] = await Promise.all([
+  // Main result set + leaderboards + total active count run in parallel.
+  const [resultsRes, leaderboardRes, categoriesRes, totalCountRes] = await Promise.all([
     sb.rpc('search_endpoints', {
       q: capability ?? null,
       category: category ?? null,
@@ -67,9 +77,12 @@ export default async function DiscoverPage({
     }),
     sb.from('discover_view').select('*').order('score', { ascending: false }).limit(60),
     sb.from('providers').select('categories'),
+    sb.from('endpoints').select('id', { count: 'exact', head: true }).eq('active', true),
   ]);
 
   const rows: DiscoverRow[] = (resultsRes.data ?? []).map(rowFromView);
+  const totalActive = totalCountRes.count ?? rows.length;
+  const hasFilters = Boolean(capability || category || minScore > 0 || maxPrice < 1_000_000_000);
 
   // Leaderboards: top 5 endpoints per category, derived in JS from the same
   // recent-scored set. Cheap because the dataset is bounded (60 rows).
@@ -91,9 +104,13 @@ export default async function DiscoverPage({
 
   return (
     <div className="space-y-10">
-      <div className="flex items-baseline gap-4">
+      <div className="flex items-baseline flex-wrap gap-x-4 gap-y-2">
         <h1 className="text-2xl font-bold">Discover</h1>
-        <span className="text-sm text-white/50">{rows.length} endpoints</span>
+        <span className="text-sm text-white/60 tabular-nums">
+          {hasFilters
+            ? `${rows.length} match${rows.length === 1 ? '' : 'es'} of ${totalActive} active`
+            : `Showing ${rows.length} of ${totalActive} active endpoints`}
+        </span>
       </div>
 
       {/* Filters: GET-form so SSR rules and URLs stay shareable. */}

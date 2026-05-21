@@ -6,6 +6,14 @@ export function formatPrice(amountUsd: number | null | undefined): string {
   return `$${amountUsd.toFixed(2)}`;
 }
 
+export function formatLatency(ms: number | null | undefined): string {
+  if (ms == null) return '—';
+  if (ms < 1) return '<1ms';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 export function priceBand(amountUsd: number | null | undefined): string {
   if (amountUsd == null) return 'unknown';
   if (amountUsd === 0) return 'free';

@@ -8,6 +8,7 @@ import { VerifyButton } from './verify-button';
 export interface ScoreModalRow {
   endpoint_id: string;
   url: string;
+  path: string;
   method: string;
   capabilities: string[];
   pricing: { amount_usd: number; model: string } | null;
@@ -24,6 +25,7 @@ export interface ScoreModalRow {
   score_computed_at: string | null;
   engine_version: string | null;
   last_probe_ts: string | null;
+  latency_p95_ms: number | null;
 }
 
 interface Props {
